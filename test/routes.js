@@ -50,7 +50,6 @@ describe('Initializing Payment Gateway Test Integration Test', () => {
       })
       .end((err, res) => {
         if (err) throw err;
-        r.user = res.body.data;
         expect(res.body).to.have.property('data');
         expect(res.body.data).to.have.property('id');
         done();

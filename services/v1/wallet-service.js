@@ -71,7 +71,7 @@ module.exports = {
           code: data.code,
           account_number: data.account_number,
         },
-        callback_url: 'http://bda5-197-210-77-157.ngrok.io/fund/account/validate',
+        callback_url: data.callback_url,
         reference: data.reference,
       };
 
@@ -102,6 +102,7 @@ module.exports = {
     const updateTxn = {};
     let promise;
     let returnObj = {};
+    let user;
 
     try {
       const ref = body.reference || query.reference;
@@ -136,8 +137,16 @@ module.exports = {
           ...promise.body,
         };
       } else if (query.reference) {
-        wallet = await model.wallet.findOne({ where: { userId: txn.userId }, raw: true });
+        const bigPromise = await Promise.all([
+          model.wallet.findOne({ where: { userId: txn.userId }, raw: true }),
+          model.users.findOne({ where: { id: txn.userId }, raw: true }),
+        ]);
+
+        wallet = bigPromise[0];
+        user = bigPromise[1];
+
         if (!(wallet && wallet.id)) throw Object({ code: 'INVALID_WALLET', msg: 'Wallet not found' });
+        if (!(user && user.id)) throw Object({ code: 'INVALID_USER', msg: 'User not found' });
 
         promise = await services.request.httpRequest('GET', `${paystackUrl}/transaction/verify/${ref}`, { authToken: `Bearer ${paystackPublicKey}` });
 
@@ -149,6 +158,7 @@ module.exports = {
           updateTxn.status = 'completed';
           updateTxn.responseCode = '00';
           module.exports.updateBalance(wallet.id, txn.amount, txn.id);
+          services.request.sendMail(user.email, 'Account Funding Status', `Your wallet has successfully been funded with NGN ${promise.body.data.amount}`);
         } else if (promise.body.data.status === 'failed') {
           updateTxn.status = 'failed';
           updateTxn.responseCode = 'C0';
@@ -279,6 +289,7 @@ module.exports = {
   validateCardFunding: async (data) => {
     let txn;
     let wallet;
+    let user;
     const updateTxn = {
       status: 'failed',
       responseMessage: data.responseMessage || 'Request Failed',
@@ -289,8 +300,16 @@ module.exports = {
       txn = await model.transactions.findOne({ where: { flutterReference: data.ref, source: 'card' }, raw: true });
       if (!(txn && txn.id)) throw Object({ code: 'INVALID_TRANSACTION', msg: 'Transaction not found' });
 
-      wallet = await model.wallet.findOne({ where: { userId: txn.userId }, raw: true });
+      const bigPromise = await Promise.all([
+        model.wallet.findOne({ where: { userId: txn.userId }, raw: true }),
+        model.users.findOne({ where: { id: txn.userId }, raw: true }),
+      ]);
+
+      wallet = bigPromise[0];
+      user = bigPromise[1];
+
       if (!(wallet && wallet.id)) throw Object({ code: 'INVALID_WALLET', msg: 'Wallet not found' });
+      if (!(user && user.id)) throw Object({ code: 'INVALID_USER', msg: 'User not found' });
 
       if (txn.status !== 'pending' || txn.responseCode === '00') throw Object({ code: 'INVALID_TRANSACTION', msg: 'Transaction already validated' });
 
@@ -300,6 +319,7 @@ module.exports = {
       }
 
       model.transactions.update(updateTxn, { where: { id: txn.id } });
+      services.request.sendMail(user.email, 'Card Funding Status', `Your wallet has successfully been funded with NGN ${txn.amount}`);
 
       return data;
     } catch (error) {
@@ -403,7 +423,7 @@ module.exports = {
         await model.transactions.update(updateTxn, { where: { id: txn.id } });
       } else throw Object({ code: 'INVALID_MEDIUM', msg: 'Medium is invalid' });
 
-      await services.request.sendMail(user.email, 'Transaction Status', `Your transfer of NGN ${data.amount} was successful`);
+      services.request.sendMail(user.email, 'Transaction Status', `Your transfer of NGN ${data.amount} was successful`);
 
       return payout;
     } catch (error) {

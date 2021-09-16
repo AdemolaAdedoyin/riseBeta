@@ -1,6 +1,9 @@
 /* eslint-disable no-unused-expressions */
 const validator = require('validator');
 const services = require('../../services');
+const appConfig = require('../../config/app');
+
+const { port } = appConfig;
 
 module.exports = {
   createWallet: async (req, res) => {
@@ -93,7 +96,7 @@ module.exports = {
         medium: 'mobile',
         sender_bank: req.body.sender_bank || '044',
         ref: `${Date.now().toString().slice(0, 10)}${Math.random().toString().slice(-5)}`,
-        redirecturl: `${req.get('host')}/v1/fund/card/validate`,
+        redirecturl: `http://localhost:${port}/v1/fund/card/validate`,
       };
 
       if (req.body.charge_with === 'card' || !req.body.charge_with) {
@@ -106,7 +109,7 @@ module.exports = {
       } else if (req.body.charge_with === 'account') {
         body.code = req.body.code;
         body.account_number = req.body.account_number;
-        body.callback_url = `${req.get('host')}/fund/account/validate`;
+        body.callback_url = `http://localhost:${port}/v1/fund/account/validate`;
         body.reference = body.ref;
       } else throw Object({ code: 'INVALID_CHARGE_WITH', msg: 'Charge with is invalid. Only card and account' });
 
