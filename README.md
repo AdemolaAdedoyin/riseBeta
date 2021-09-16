@@ -3,7 +3,7 @@ A mini fintech  API that allows users register, authenticate, payout and fund th
 
 # Built With
 
-Nodejs consuming external Apis, e.g Flutterwaves Api and Paystacks Api
+The system was built using Nodejs, while consuming external Apis, e.g Flutterwaves Api, Paystacks Api, Nodemailer api
 
 # Getting Started
 
@@ -51,6 +51,6 @@ To run the test script
 MW_API_KEY="YOUR MONEYWAVE API KEY" MW_SECRET="YOUR MONEYWAVE SECRET KEY" MW_WALLET_PASSWORD="YOUR MONEYWAVE WALLET PASSWORD" PAYSTACK_PUBLIC_KEY="YOUR PAYSTACK PUBLIC KEY" ACCOUNT_EMAIL="YOUR EMAIL TO USE FOR NOTIFICATIONS" ACCOUNT_PASSWORD="YOUR EMAIL PASSWORD" NODE_ENV=production npm run test
 ```
 
-Documentaion for the api can be found here, https://documenter.getpostman.com/view/1676833/U16oq44V
+Documentaion for the api can be found here, [doc] (https://documenter.getpostman.com/view/1676833/U16oq44V)
 
 Contact me if any issue is encountered or token and keys are needed, adedoyinademola397@gmail.com
