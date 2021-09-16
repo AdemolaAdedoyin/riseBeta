@@ -1,4 +1,4 @@
-# fintech
+# FINTECH
 A mini fintech  API that allows users register, authenticate, payout and fund their NGN wallet.
 
 # Built With
