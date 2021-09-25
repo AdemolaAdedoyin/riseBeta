@@ -35,7 +35,7 @@ module.exports = function (sequelize, DataTypes) {
     },
     currency: {
       type: DataTypes.STRING,
-      defaultValue: 'NGN',
+      defaultValue: 'USD',
     },
   }, {
     paranoid: true,

@@ -12,10 +12,13 @@ router.post('/disburse', authorized, wallet.disburseFromWallet);
 router.post('/fund', authorized, wallet.fundWallet);
 router.get('/fund/card/validate', wallet.validateCardFunding);
 router.all('/fund/account/validate', wallet.validateAccountFunding);
-router.get('/wallet', authorized, wallet.fetchWallet);
+router.post('/plan', authorized, wallet.createPlan);
+router.get('/transactions', authorized, wallet.fetchTransactions);
+router.post('/transactions/reverse', authorized, wallet.reverseTransaction);
+router.get('/roi', authorized, wallet.getROI);
+router.post('/plan/fund', authorized, wallet.fundPlan);
 
 router.post('/beneficiary', authorized, beneficiary.createBeneficiary);
-router.get('/beneficiary', authorized, beneficiary.fetchBeneficiary);
 
 router.get('/banks', authorized, banks.fetchBanks);
 

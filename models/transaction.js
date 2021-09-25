@@ -31,15 +31,19 @@ module.exports = function (sequelize, DataTypes) {
       allowNull: false,
     },
     source: {
-      type: DataTypes.ENUM('card', 'wallet', 'system', 'account'),
+      type: DataTypes.ENUM('card', 'wallet', 'system', 'account', 'plan'),
       allowNull: true,
     },
     source_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
     },
+    currency: {
+      type: DataTypes.STRING,
+      defaultValue: 'USD',
+    },
     dest: {
-      type: DataTypes.ENUM('beneficiary', 'wallet', 'system'),
+      type: DataTypes.ENUM('beneficiary', 'wallet', 'system', 'plan'),
       allowNull: true,
     },
     dest_id: {
@@ -73,7 +77,7 @@ module.exports = function (sequelize, DataTypes) {
     },
     reversed: {
       type: DataTypes.BOOLEAN,
-      allowNull: true,
+      defaultValue: 0,
     },
   }, {
     indexes: [{ unique: true, fields: ['ref', 'userId'] }],

@@ -124,4 +124,24 @@ module.exports = {
     }
   },
 
+  getExchangeRate: async (name) => {
+    let exchangeRate;
+
+    switch (name) {
+      case 'Crypto':
+        exchangeRate = 30000;
+        break;
+      case 'newCryptoRate':
+        exchangeRate = 30000;
+        break;
+      case 'USD':
+        exchangeRate = 565;
+        break;
+      default:
+        exchangeRate = 40;
+        break;
+    }
+
+    return exchangeRate;
+  },
 };

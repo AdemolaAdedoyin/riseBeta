@@ -282,7 +282,7 @@ describe('Initializing Payment Gateway Test Integration Test', () => {
         name: 'asd',
         amount: 100,
         lock: 'remember',
-        currency: 'NGN',
+        currency: 'USD',
         medium: 'email',
         destinationEmail: 'dayo@flutterwavego.com',
       })
@@ -304,7 +304,7 @@ describe('Initializing Payment Gateway Test Integration Test', () => {
         name: 'asd',
         amount: 100,
         lock: 'remember',
-        currency: 'NGN',
+        currency: 'USD',
         medium: 'beneficiary',
         beneficiaryId: r.beneficiary.id,
       })

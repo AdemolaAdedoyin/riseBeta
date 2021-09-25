@@ -1,9 +1,13 @@
+/* eslint-disable no-await-in-loop */
+/* eslint-disable no-restricted-syntax */
+/* eslint-disable guard-for-in */
 /* eslint-disable no-param-reassign */
 /* eslint-disable prefer-destructuring */
 /* eslint-disable no-const-assign */
 /* eslint-disable no-unused-expressions */
 const bcrypt = require('bcrypt-nodejs');
 const momentT = require('moment-timezone');
+const moment = require('moment');
 const model = require('../../models');
 const services = require('..');
 const appConfig = require('../../config/app');
@@ -32,29 +36,110 @@ module.exports = {
     }
   },
 
-  fetchWallet: async (userId) => {
-    const querypart = [];
+  fetchRealTime: async (user, request) => {
     try {
-      const attributepart = '*';
+      if (!request.planId) throw Object({ code: 'PLAN_REQUIRED', msg: 'Plan Id required' });
 
-      querypart.push(`SELECT ${attributepart} from wallets`);
+      const plan = await model.plans.findOne({ where: { id: request.planId } });
 
-      if (userId) querypart.push(`Where userId = ${userId} and deletedAt is NULL`);
-      else querypart.push('Where id = 0 and deletedAt is NULL');
+      if (!(plan && plan.id)) throw Object({ code: 'INVALID_PLAN', msg: 'Plan does not exist' });
 
-      querypart.push(' ORDER BY id DESC');
-
-      const response = await sequelize.query(querypart.join(' '), {
-        type: sequelize.QueryTypes.SELECT,
-        replacements: [],
+      const firsTxn = await model.transactions.findOne({
+        where: {
+          userId: user.id, dest_id: request.planId, dest: 'plan', type: 'fund',
+        },
+        order: [
+          ['createdAt', 'ASC'],
+        ],
+        raw: true,
       });
 
-      return response;
+      const currentBalance = firsTxn.amount * (1 + await module.exports.getROI(user));
+
+      return currentBalance;
     } catch (error) {
-      console.log('can not get wallet: ', error);
-      if (error.name === 'SequelizeUniqueConstraintError') {
-        error.message = error.parent.message || error.errors[0].message;
+      throw Object({
+        code: error.name || error.code || 'SERVER_ERROR',
+        msg: error.message || error.msg || 'Server failed',
+      });
+    }
+  },
+
+  fetchHistoricalTransactions: async (user, request) => {
+    try {
+      const page = Number(request.page) || 1;
+      const limit = Number(request.per_page) || 100;
+
+      const query = ['Select tr.*, u.email, p.planName, ac.name as asserClassName from transactions tr'];
+      query.push(' left join plans p On p.id = tr.dest_id left join assertClasses ac On p.assertId = ac.id left join users u On tr.userId = u.id');
+      query.push(' Where status = ? and dest != ? and source != ?');
+      query.push(` and tr.userId = ${user.id}`);
+
+      for (const x in request) {
+        const field = x;
+        const value = request[x];
+
+        if (field || field === 0) {
+          switch (field) {
+            case 'type':
+              if (field === 'fund' || field === 'disburse') query.push(` and type = '${value}'`);
+              break;
+            case 'ref':
+              query.push(` and ref = '${value}' OR flutterReference = '${value}'`);
+              break;
+            case 'plan':
+              query.push(` and dest_id = ${value}`);
+              break;
+            default:
+              break;
+          }
+        }
       }
+
+      const queryCount = query.slice();
+      queryCount[0] = 'Select count(tr.id) as count from transactions tr';
+
+      query.push('ORDER BY tr.id DESC');
+      query.push(` LIMIT ${limit * (page - 1)}, ${limit}`);
+
+      const bigPromise = await Promise.all([
+        sequelize.query(query.join(' '), { type: sequelize.QueryTypes.SELECT, replacements: ['completed', 'system', 'system'] }),
+        sequelize.query(queryCount.join(' '), { type: sequelize.QueryTypes.SELECT, replacements: ['completed', 'system', 'system'] }),
+      ]);
+
+      console.log(bigPromise[1][0]);
+
+      return {
+        response: bigPromise[0], count: bigPromise[1][0].count, page, limit,
+      };
+    } catch (error) {
+      throw Object({
+        code: error.name || error.code || 'SERVER_ERROR',
+        msg: error.message || error.msg || 'Server failed',
+      });
+    }
+  },
+
+  createPlan: async (data) => {
+    try {
+      const obj = {
+        ...data,
+      };
+      const assert = await model.assertClasses.findOne({ where: { name: data.assertName }, raw: true });
+
+      if (!(assert && assert.id)) throw Object({ code: 'INVALID_ASSERT', msg: 'Assert not found' });
+
+      obj.assertId = assert.id;
+      delete obj.assertName;
+
+      const plans = await model.plans.findOrCreate({
+        where: obj,
+        defaults: obj,
+        raw: true,
+      });
+
+      return plans;
+    } catch (error) {
       throw Object({
         code: error.name || error.code || 'SERVER_ERROR',
         msg: error.message || error.msg || 'Server failed',
@@ -66,7 +151,7 @@ module.exports = {
     try {
       const payload = {
         email: data.email,
-        amount: Number(data.amount),
+        amount: Number(data.amount) * 100,
         bank: {
           code: data.code,
           account_number: data.account_number,
@@ -150,7 +235,7 @@ module.exports = {
 
         promise = await services.request.httpRequest('GET', `${paystackUrl}/transaction/verify/${ref}`, { authToken: `Bearer ${paystackPublicKey}` });
 
-        if (!promise.body || !promise.body.status || !promise.body.data || promise.body.data.amount !== txn.amount) throw Object({ code: 'FAILED_VERIFICATION', msg: (promise.body.data) ? promise.body.data.message : promise.body.message || 'Callback failed' });
+        if (!promise.body || !promise.body.status || !promise.body.data || (promise.body.data.amount / 100) !== Math.round(txn.amount * await services.request.getExchangeRate('USD'))) throw Object({ code: 'FAILED_VERIFICATION', msg: (promise.body.data) ? promise.body.data.message : promise.body.message || 'Callback failed' });
 
         updateTxn.responseMessage = promise.body.data.message;
 
@@ -158,7 +243,7 @@ module.exports = {
           updateTxn.status = 'completed';
           updateTxn.responseCode = '00';
           module.exports.updateBalance(wallet.id, txn.amount, txn.id);
-          services.request.sendMail(user.email, 'Account Funding Status', `Your wallet has successfully been funded with NGN ${promise.body.data.amount}`);
+          services.request.sendMail(user.email, 'Account Funding Status', `Your wallet has successfully been funded with USD ${promise.body.data.amount}`);
         } else if (promise.body.data.status === 'failed') {
           updateTxn.status = 'failed';
           updateTxn.responseCode = 'C0';
@@ -192,7 +277,7 @@ module.exports = {
 
       let res = await services.request.httpRequest('POST', `${stagingUrl}/v1/transfer/rave`, { payload: { ...data }, authToken: token });
 
-      if (res.code !== 200 || res.body.status !== 'success' || !res.body.data || !res.body.data.transfer) throw Object({ code: 'FAILED_FUNDING', msg: 'Funding failed' });
+      if (res.code !== 200 || res.body.status !== 'success' || !res.body.data || !res.body.data.transfer) throw Object({ code: 'FAILED_FUNDING', msg: res.body.message || 'Funding failed' });
 
       res = res.body.data;
 
@@ -235,6 +320,245 @@ module.exports = {
     }
   },
 
+  reverse: async (userId, data) => {
+    try {
+      const type = (data.amount > 0) ? 'CREDIT' : 'DEBIT';
+      const wallet = await model.wallet.findOne({ where: { userId } });
+
+      if (!(wallet && wallet.id)) {
+        throw Object({ code: 'INVALID_SOURCE_WALLET', msg: 'Source Wallet not found' });
+      }
+
+      if (type === 'DEBIT' && (wallet.balance) < Math.abs(data.amount)) {
+        throw Object({ code: 'INSUFFICIENT_FUNDS', msg: 'Insufficient funds for Transaction' });
+      }
+
+      const transaction = {
+        amount: Math.abs(data.amount),
+        fee: 0,
+        userId,
+        currencyId: 'USD',
+        ref: data.ref,
+      };
+
+      if (data.message) transaction.responseMessage = data.message;
+
+      if (type === 'CREDIT') {
+        transaction.type = 'fund';
+        transaction.source = data.customSource || 'system';
+        transaction.source_id = data.customSourceId || 0;
+        transaction.dest = 'wallet';
+        transaction.dest_id = wallet.id;
+      } else {
+        transaction.type = 'disburse';
+        transaction.source = 'wallet';
+        transaction.source_id = wallet.id;
+        transaction.dest = data.customDest || 'system';
+        transaction.dest_id = data.customDestId || 0;
+      }
+
+      const txn = await model.transactions.create(transaction);
+
+      const balance = await module.exports.updateBalance(wallet.id, data.amount, txn.id);
+
+      model.transactions.update({ status: 'completed', meta: JSON.stringify({ balance, narration: data.narration }) }, { where: { id: txn.id } });
+
+      return { id: txn.id, msg: 'Successful' };
+    } catch (error) {
+      console.log('reversal failed: ', error);
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        error.message = error.parent.message || error.errors[0].message;
+      }
+      throw Object({
+        code: error.name || error.code || 'SERVER_ERROR',
+        msg: error.message || error.msg || 'Server failed',
+      });
+    }
+  },
+
+  reverseTransaction: async (userId, reference, options = {}) => {
+    let txn;
+    try {
+      txn = await model.transactions.findOne({
+        where: {
+          ref: reference, status: 'completed', userId, reversed: 0,
+        },
+        raw: true,
+      });
+
+      if (!(txn && txn.id)) {
+        throw Object({ code: 'INVALID_REFERENCE', msg: 'Transaction not found or not in required state.' });
+      }
+
+      const data = {
+        walletId: txn.type === 'disburse' ? txn.source_id : txn.dest_id,
+        amount: txn.type === 'disburse' ? Number(txn.amount) + Number(txn.fee) : (Number(txn.amount) + Number(txn.fee)) * -1,
+        currency: txn.currency,
+        narration: txn.type === 'disburse' ? `Payoutrefund/${(txn.ref || txn.flutterReference)}` : `Fundreversal/${(txn.ref || txn.flutterReference)}`,
+        ref: `${txn.ref}R`,
+        message: (options.updateResponseMessage) ? options.updateResponseMessage : txn.responseMessage,
+      };
+
+      await module.exports.reverse(txn.userId, data);
+
+      const update = {
+        reversed: true,
+        responseCode: options.updateResponseCode || 'RR',
+        responseMessage: options.updateResponseMessage || 'Transaction Failed',
+      };
+
+      await model.transactions.update(update, { where: { id: txn.id } });
+
+      return model.transactions.findOne({ where: { id: txn.id } });
+    } catch (error) {
+      console.log('reversal failed: ', error);
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        error.message = error.parent.message || error.errors[0].message;
+      }
+      throw Object({
+        code: error.name || error.code || 'SERVER_ERROR',
+        msg: error.message || error.msg || 'Server failed',
+      });
+    }
+  },
+
+  getROI: async (user) => {
+    try {
+      // https://www.aaii.com/journal/article/how-to-calculate-the-return-on-your-portfolio?printerfriendly=true
+      // formular gotten from the above link (Time-Weighted Return)
+
+      let query = 'select amount, type from transactions where status = ? and reversed != ? and userId = ? and (source = ? OR dest = ?)';
+      let allPlans = 'select tr.*, ac.name as assertName from transactions tr left join plans p On p.id = tr.dest_id left join assertClasses ac On p.assertId = ac.id where status = ? and reversed != ? and tr.userId = ? and type = ? and dest = ? group by dest_id order by tr.createdAt ASC';
+      let allUnits = 'select meta, type from transactions tr where status = ? and reversed != ? and tr.userId = ? and dest = ?';
+
+      const bigPromise = await Promise.all([
+        sequelize.query(query, { type: sequelize.QueryTypes.SELECT, replacements: ['completed', 1, user.id, 'plan', 'plan'] }),
+        sequelize.query(allPlans, { type: sequelize.QueryTypes.SELECT, replacements: ['completed', 1, user.id, 'fund', 'plan'] }),
+        sequelize.query(allUnits, { type: sequelize.QueryTypes.SELECT, replacements: ['completed', 1, user.id, 'plan'] }),
+      ]);
+
+      query = bigPromise[0];
+      allPlans = bigPromise[1];
+      allUnits = bigPromise[2];
+
+      let netAdditions = 0;
+      let beginningValue = 0;
+      let endingValue = 0;
+      let unit = 0;
+      let ignoreFirst = true;
+
+      query.forEach((v) => {
+        if (v.type === 'fund') {
+          if (!ignoreFirst) netAdditions += v.amount;
+          ignoreFirst = false;
+        } else if (v.type === 'disburse') netAdditions -= v.amount;
+      });
+
+      for (const x in allUnits) {
+        const current = allUnits[x];
+        const meta = current.meta ? JSON.parse(current.meta) : {};
+
+        if (current.type === 'fund') unit += meta.unit;
+        if (current.type === 'disburse') unit -= meta.unit;
+      }
+
+      endingValue = unit * await services.request.getExchangeRate('newCryptoRate');
+
+      for (const x in allPlans) {
+        const current = allPlans[x];
+        beginningValue += current.amount;
+      }
+
+      const numerator = endingValue - (0.50 * netAdditions);
+      const denominator = beginningValue + (0.50 * netAdditions);
+      const rio = (numerator / denominator) - 1;
+
+      return rio;
+    } catch (error) {
+      console.log('get ROI failed: ', error);
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        error.message = error.parent.message || error.errors[0].message;
+      }
+      throw Object({
+        code: error.name || error.code || 'SERVER_ERROR',
+        msg: error.message || error.msg || 'Server failed',
+      });
+    }
+  },
+
+  fundPlan: async (user, data) => {
+    let txn;
+    let debited;
+    let wallet;
+
+    try {
+      wallet = model.wallet.findOne({ where: { userId: user.id }, raw: true });
+      let plan = model.plans.findOne({ where: { userId: user.id, planName: data.planName }, raw: true });
+
+      const bigPromise = await Promise.all([wallet, plan]);
+
+      wallet = bigPromise[0];
+      plan = bigPromise[1];
+
+      if (data.amount < 10) {
+        throw Object({ code: 'INVALID_AMOUNT', msg: 'You can not fund with less than 10 dollars' });
+      }
+
+      if (!(wallet && wallet.id)) {
+        throw Object({ code: 'INVALID_WALLET', msg: 'Wallet not found' });
+      }
+
+      if (!(plan && plan.id)) {
+        throw Object({ code: 'INVALID_PLAN', msg: 'Plan not found' });
+      }
+
+      if (wallet.balance < data.amount) {
+        throw Object({ code: 'LOW_BALANCE', msg: 'Wallet balance is not sufficient' });
+      }
+
+      data.getExchangeRate = await services.request.getExchangeRate('Crypto');
+      data.unit = data.amount / data.getExchangeRate;
+
+      const transaction = {
+        amount: data.amount.toFixed(2),
+        fee: 0,
+        type: 'fund',
+        source: 'wallet',
+        source_id: wallet.id,
+        dest: 'plan',
+        status: 'completed',
+        dest_id: plan.id,
+        userId: user.id,
+        currency: data.chargeCurrency || 'USD',
+        ref: `${Date.now().toString().slice(0, 10)}${Math.random().toString().slice(-5)}`,
+        meta: JSON.stringify(data),
+      };
+
+      txn = await model.transactions.create(transaction);
+      txn = txn.dataValues;
+
+      await module.exports.updateBalance(wallet.id, txn.amount * -1, txn.id);
+      debited = true;
+
+      return txn;
+    } catch (error) {
+      const updateTxn = {
+        status: 'failed',
+        responseMessage: 'Request Failed',
+        responseCode: 'C0',
+      };
+
+      if (txn) model.transactions.update(updateTxn, { where: { id: txn.id } });
+
+      if (debited) await module.exports.updateBalance(wallet.id, Math.abs(txn.amount), txn.id);
+
+      throw Object({
+        code: error.name || error.code || 'SERVER_ERROR',
+        msg: error.message || error.msg || 'Server failed',
+      });
+    }
+  },
+
   fundWallet: async (user, data) => {
     let txn;
     try {
@@ -244,8 +568,15 @@ module.exports = {
         throw Object({ code: 'INVALID_WALLET', msg: 'Wallet not found' });
       }
 
+      const meta = { ...data };
+      delete meta.cvv;
+      delete meta.expiry_year;
+      delete meta.expiry_month;
+      delete meta.pin;
+      delete meta.card_no;
+
       const transaction = {
-        amount: data.amount,
+        amount: data.charge_currency === 'USD' ? (data.amount *= 1).toFixed(2) : (data.amount / await services.request.getExchangeRate('USD')).toFixed(2),
         fee: 0,
         type: 'fund',
         source: data.charge_with === 'card' ? 'card' : 'account',
@@ -253,17 +584,16 @@ module.exports = {
         dest: 'wallet',
         dest_id: wallet.id,
         userId: user.id,
-        currency: data.chargeCurrency || 'NGN',
+        currency: 'USD',
         ref: data.ref,
-        meta: JSON.stringify({
-          firstName: data.firstname, lastName: data.lastname, email: data.email, charge_with: data.charge_with,
-        }),
+        meta: JSON.stringify(meta),
       };
 
       txn = await model.transactions.create(transaction);
       txn = txn.dataValues;
 
       let funding;
+      data.disburse_currency = 'NGN';
 
       if (data.charge_with === 'card') funding = await module.exports.fundViaRave(wallet, txn, data);
       else if (data.charge_with === 'account') funding = await module.exports.fundingViaPayStack(data);
@@ -319,7 +649,7 @@ module.exports = {
       }
 
       model.transactions.update(updateTxn, { where: { id: txn.id } });
-      services.request.sendMail(user.email, 'Card Funding Status', `Your wallet has successfully been funded with NGN ${txn.amount}`);
+      services.request.sendMail(user.email, 'Card Funding Status', `Your wallet has successfully been funded with USD ${txn.amount}`);
 
       return data;
     } catch (error) {
@@ -345,85 +675,96 @@ module.exports = {
       };
       let payout;
 
-      if (data.medium === 'email') payout = await module.exports.disburseToUser(payload);
-      else if (data.medium === 'beneficiary') {
-        if (!data.beneficiaryId) throw Object({ code: 'INVALID_BENEFICIARY_ID', msg: '{beneficiaryId} Beneficiary Id is required' });
+      let wallet = model.wallet.findOne({ where: { userId: payload.userId }, raw: true });
+      let fetchedBeneficiary = services.beneficiary.createBeneficiary({
+        accountName: payload.accountName,
+        accountNumber: payload.accountNumber,
+        bankCode: payload.bankcode,
+        userId: payload.userId,
+        currency: 'USD',
+      });
+      let similarTxn = sequelize.query('Select * from transactions where userId = ? order by createdAt DESC LIMIT 1', { type: sequelize.QueryTypes.SELECT, replacements: [payload.userId] });
 
-        let wallet = model.wallet.findOne({ where: { userId: payload.userId }, raw: true });
-        let fetchedBeneficiary = model.beneficiary.findOne({ where: { id: data.beneficiaryId } });
+      bigPromise = await Promise.all([wallet, fetchedBeneficiary, similarTxn]);
 
-        bigPromise = await Promise.all([wallet, fetchedBeneficiary]);
+      wallet = bigPromise[0];
+      fetchedBeneficiary = bigPromise[1];
+      similarTxn = bigPromise[2];
 
-        wallet = bigPromise[0];
-        fetchedBeneficiary = bigPromise[1];
+      if (Array.isArray(similarTxn)) similarTxn = similarTxn[0];
 
-        reversedObj.wallet = wallet;
+      reversedObj.wallet = wallet;
 
-        if (!(wallet && wallet.id)) {
-          throw Object({ code: 'INVALID_WALLET', msg: 'Wallet not found' });
-        } else if (!bcrypt.compareSync(data.lock, wallet.lock_code)) {
-          throw Object({ code: 'INVALID_LOCKCODE', msg: 'Wallet Lock code does not match.' });
-        }
+      const now = moment(new Date());
+      const end = moment(similarTxn.createdAt);
+      const duration = moment.duration(now.diff(end));
+      const seconds = duration.asSeconds();
 
-        if (Array.isArray(fetchedBeneficiary)) fetchedBeneficiary = fetchedBeneficiary[0];
+      if (!(wallet && wallet.id)) {
+        throw Object({ code: 'INVALID_WALLET', msg: 'Wallet not found' });
+      } else if (!bcrypt.compareSync(data.lock, wallet.lock_code)) {
+        throw Object({ code: 'INVALID_LOCKCODE', msg: 'Wallet Lock code does not match.' });
+      } else if (seconds < 15) {
+        throw Object({ code: 'POSSIBLE_DUPLICATE', msg: 'Similar transactions are prevented for 15 seconds' });
+      }
 
-        if (!(fetchedBeneficiary && fetchedBeneficiary.id)) throw Object({ code: 'INVALID_BENEFICIARY', msg: 'Beneficiary does not exist' });
+      if (Array.isArray(fetchedBeneficiary)) fetchedBeneficiary = fetchedBeneficiary[0];
 
-        payload.accountNumber = fetchedBeneficiary.accountNumber;
-        payload.bankcode = fetchedBeneficiary.bankCode;
+      if (!(fetchedBeneficiary && fetchedBeneficiary.id)) throw Object({ code: 'INVALID_BENEFICIARY', msg: 'Beneficiary does not exist' });
 
-        const transaction = {
-          amount: data.amount,
-          fee: 40,
-          type: 'disburse',
-          source: 'wallet',
-          source_id: wallet.id,
-          dest: 'beneficiary',
-          dest_id: fetchedBeneficiary.id,
-          userId: user.id,
-          currency: 'NGN',
-          ref: reference,
-        };
+      const transaction = {
+        amount: data.amount.toFixed(2),
+        fee: 40,
+        type: 'disburse',
+        source: 'wallet',
+        source_id: wallet.id,
+        dest: 'beneficiary',
+        dest_id: fetchedBeneficiary.id,
+        userId: user.id,
+        currency: 'USD',
+        ref: reference,
+      };
 
-        reversedObj.amount = (transaction.amount + transaction.fee);
+      reversedObj.amount = (transaction.amount + transaction.fee);
 
-        if (wallet.balance < (transaction.amount + transaction.fee)) {
-          throw Object({ code: 'LOW_BALANCE', msg: 'Wallet balance is not sufficient' });
-        }
+      if (wallet.balance < (transaction.amount + transaction.fee)) {
+        throw Object({ code: 'LOW_BALANCE', msg: 'Wallet balance is not sufficient' });
+      }
 
-        const txn = await model.transactions.create(transaction);
-        reversedObj.txn = txn.dataValues;
+      const txn = await model.transactions.create(transaction);
+      reversedObj.txn = txn.dataValues;
 
-        let token = await services.request.httpRequest('POST', `${stagingUrl}/v1/merchant/verify`, { payload: { apiKey: mwApiKey, secret: mwSecret } });
-        if (!(token && token.body && token.body.token)) throw Object({ code: 'INVALID_REQUEST', msg: token.body.message || 'Invalid Request' });
-        token = token.body.token;
+      let token = await services.request.httpRequest('POST', `${stagingUrl}/v1/merchant/verify`, { payload: { apiKey: mwApiKey, secret: mwSecret } });
+      if (!(token && token.body && token.body.token)) throw Object({ code: 'INVALID_REQUEST', msg: token.body.message || 'Invalid Request' });
+      token = token.body.token;
 
-        payload.ref = reference;
-        payload.lock = mwWalletPassword;
+      payload.ref = reference;
+      payload.lock = mwWalletPassword;
+      payload.currency = 'NGN';
+      payload.amount *= await services.request.getExchangeRate('USD');
 
-        payout = await services.request.httpRequest('POST', `${stagingUrl}/v1/disburse`, { payload, authToken: token });
-        if (!payout || payout.code !== 200) throw Object({ code: payout.body.code, msg: payout.body.message });
+      payout = await services.request.httpRequest('POST', `${stagingUrl}/v1/disburse`, { payload, authToken: token });
+      if (!payout || payout.code !== 200) throw Object({ code: payout.body.code, msg: payout.body.message });
 
-        const debitAmount = (transaction.amount + transaction.fee) * -1;
-        const debitBalance = await module.exports.updateBalance(wallet.id, debitAmount, txn.id);
+      const debitAmount = (transaction.amount + transaction.fee) * -1;
+      const debitBalance = await module.exports.updateBalance(wallet.id, debitAmount, txn.id);
 
-        charged = true;
+      charged = true;
 
-        payout = payout.body.data.data;
+      payout = payout.body.data.data;
 
-        const updateTxn = {
-          responseMessage: payout.responsemessage,
-          responseCode: payout.responsecode,
-          flutterReference: payout.uniquereference,
-          walletCharged: true,
-          meta: JSON.stringify({ balance: debitBalance, narration: data.narration }),
-          status: (payout.responsecode === '00') ? 'completed' : 'pending',
-        };
+      const updateTxn = {
+        responseMessage: payout.responsemessage,
+        responseCode: payout.responsecode,
+        flutterReference: payout.uniquereference,
+        walletCharged: true,
+        meta: JSON.stringify({ balance: debitBalance, narration: data.narration }),
+        status: (payout.responsecode === '00') ? 'completed' : 'pending',
+      };
 
-        await model.transactions.update(updateTxn, { where: { id: txn.id } });
-      } else throw Object({ code: 'INVALID_MEDIUM', msg: 'Medium is invalid' });
+      await model.transactions.update(updateTxn, { where: { id: txn.id } });
 
-      services.request.sendMail(user.email, 'Transaction Status', `Your transfer of NGN ${data.amount} was successful`);
+      services.request.sendMail(user.email, 'Transaction Status', `Your transfer of USD ${data.amount} was successful`);
 
       return payout;
     } catch (error) {
@@ -437,87 +778,6 @@ module.exports = {
 
       if (reversedObj.txn) model.transactions.update(updateTxn, { where: { id: reversedObj.txn.id } });
 
-      throw Object({
-        code: error.name || error.code || 'SERVER_ERROR',
-        msg: error.message || error.msg || 'Server failed',
-      });
-    }
-  },
-
-  disburseToUser: async (data) => {
-    try {
-      if (!data.destinationEmail) throw Object({ code: 'INVALID_EMAIL', msg: ' {destinationEmail} Disburse email is required' });
-
-      let bigPromise;
-      const ref = `${Date.now().toString().slice(0, 10)}${Math.random().toString().slice(-5)}`;
-
-      const destUser = await model.users.findOne({ where: { email: data.destinationEmail }, raw: true });
-      if (!(destUser && destUser.id)) throw Object({ code: 'INVALID_EMAIL', msg: 'Destination Email is invalid' });
-
-      let sourceWallet = model.wallet.findOne({ where: { userId: data.userId }, raw: true });
-      let destWallet = model.wallet.findOne({ where: { userId: destUser.id }, raw: true });
-
-      bigPromise = await Promise.all([sourceWallet, destWallet]);
-      sourceWallet = bigPromise[0];
-      destWallet = bigPromise[1];
-
-      if (!(sourceWallet && sourceWallet.id)) {
-        throw Object({ code: 'INVALID_SOURCE_WALLET', msg: 'Source Wallet not found' });
-      } else if (!(destWallet && destWallet.id)) {
-        throw Object({ code: 'INVALID_DEST_WALLET', msg: 'Destination Wallet not found' });
-      } else if (!bcrypt.compareSync(data.lock, sourceWallet.lock_code)) {
-        throw Object({ code: 'INVALID_LOCKCODE', msg: 'Wallet Lock code does not match.' });
-      } else if (sourceWallet.balance < data.amount) {
-        throw Object({ code: 'LOW_BALANCE', msg: 'Wallet balance is not sufficient' });
-      }
-
-      const transactionOut = {
-        amount: data.amount,
-        fee: 0,
-        type: 'disburse', // 'wallet-transfer-out',
-        source: 'wallet',
-        source_id: sourceWallet.id,
-        dest: 'wallet',
-        dest_id: destWallet.id,
-        userId: sourceWallet.userId,
-        currency: 'NGN',
-        ref: `${ref}-OUT`,
-      };
-
-      const transactionIn = {
-        amount: data.amount,
-        fee: 0,
-        type: 'fund', // 'wallet-transfer-in',
-        source: 'wallet',
-        source_id: sourceWallet.id,
-        dest: 'wallet',
-        dest_id: destWallet.id,
-        userId: destWallet.userId,
-        currency: 'NGN',
-        ref: `${ref}-IN`,
-      };
-
-      const outP = await model.transactions.create(transactionOut);
-      const inP = (outP) ? await model.transactions.create(transactionIn) : null;
-
-      const debitAmount = data.amount * (-1);
-      let debitBalance = module.exports.updateBalance(sourceWallet.id, debitAmount, outP.id);
-      const creditAmount = data.amount;
-      let creditBalance = module.exports.updateBalance(destWallet.id, creditAmount, inP.id);
-
-      bigPromise = await Promise.all([debitBalance, creditBalance]);
-      debitBalance = bigPromise[0];
-      creditBalance = bigPromise[1];
-
-      await Promise.all([
-        model.transactions.update({ status: 'completed', meta: JSON.stringify({ balance: debitBalance, narration: data.narration }), walletCharged: true }, { where: { id: outP.id } }),
-        model.transactions.update({ status: 'completed', meta: JSON.stringify({ balance: creditBalance, narration: data.narration }) }, { where: { id: inP.id } }),
-      ]);
-
-      outP.status = 'completed';
-
-      return outP;
-    } catch (error) {
       throw Object({
         code: error.name || error.code || 'SERVER_ERROR',
         msg: error.message || error.msg || 'Server failed',

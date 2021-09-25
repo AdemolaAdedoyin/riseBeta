@@ -15,7 +15,7 @@ module.exports = {
         accountName: req.body.accountName,
         bankCode: req.body.bankCode,
         userId: req.user.id,
-        currency: 'NGN',
+        currency: 'USD',
       };
 
       const createBeneficiary = await services.beneficiary.createBeneficiary(data);
@@ -26,24 +26,6 @@ module.exports = {
       });
     } catch (err) {
       console.log('Beneficiary creation failed', err);
-      res.status(500).json({
-        status: 'error',
-        code: err.code,
-        message: err.msg,
-      });
-    }
-  },
-
-  fetchBeneficiary: async (req, res) => {
-    try {
-      const fetchBeneficiary = await services.beneficiary.fetchBeneficiary(req.user, req.query);
-
-      res.json({
-        status: 'success',
-        data: fetchBeneficiary,
-      });
-    } catch (err) {
-      console.log('Beneficiary fetch failed', err);
       res.status(500).json({
         status: 'error',
         code: err.code,

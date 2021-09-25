@@ -1,5 +1,10 @@
-# FINTECH
-A mini fintech  API that allows users register, authenticate, payout and fund their NGN wallet.
+# RISEBETA
+We want to build a source of truth for all transactions in our system. Design a transaction service that can handle the following requirements:
+
+Funding with support for chargebacks and refunds
+Withdrawals
+Returns(Internal Deposits)
+Can support real-time and historical consumerst and fund their USD wallet.
 
 # Built With
 
@@ -18,7 +23,7 @@ Your system must have npm and node installed, and this can be done on the termin
 ## Installation
 
 ```
-- Clone the repo https://github.com/AdemolaAdedoyin/fintech.git
+- Clone the repo https://github.com/AdemolaAdedoyin/risebeta.git
 - Install npm packages, `npm install`
 - This is a locally hosted api, so you have to have `mySQL database server` running on your system. Either through xampp or installed using brew.
 - A database to use must exist, and the name of this database will be passed when trying to start the server.

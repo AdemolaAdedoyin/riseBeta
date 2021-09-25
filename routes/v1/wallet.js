@@ -6,28 +6,28 @@ const appConfig = require('../../config/app');
 const { port } = appConfig;
 
 module.exports = {
-  createWallet: async (req, res) => {
+  createPlan: async (req, res) => {
     const params = req.body;
     try {
-      res.mosh.emptyCheck(params.name, '{name} Wallet name is required.', null, false, 400, 'INVALID_NAME');
-      res.mosh.emptyCheck(params.lock_code, '{lock_code} Wallet password is required.', null, false, 400, 'INVALID_PASSWORD');
-      res.mosh.emptyCheck(params.userId, '{userId} User Id is required.', null, false, 400, 'INVALID_USER_ID');
+      res.mosh.emptyCheck(params.planName, '{planName} Plan name is required.', null, false, 400, 'INVALID_PLAN_NAME');
+      res.mosh.emptyCheck(params.assertName, '{assertName} Assert Name is required.', null, false, 400, 'INVALID_ASSERT_NAME');
+      res.mosh.emptyCheck(params.monthlyFunding, '{monthlyFunding} Monthly Funding is required.', null, false, 400, 'INVALID_MONTHLY_FUNDING');
 
       const data = {
-        name: req.body.name,
-        password: req.body.password,
+        planName: req.body.planName,
+        assertName: req.body.assertName,
+        monthlyFunding: req.body.monthlyFunding,
+        userId: req.user.id,
       };
 
-      const createdWallet = await services.wallet.createWallet(data);
-
-      (createdWallet.dataValues) ? delete createdWallet.dataValues.lock_code : delete createdWallet.lock_code;
+      const createPlan = await services.wallet.createPlan(data);
 
       res.json({
         status: 'success',
-        data: createdWallet,
+        data: createPlan,
       });
     } catch (err) {
-      console.log('Wallet creation failed', err);
+      console.log('Plan creation failed', err);
       res.status(500).json({
         status: 'error',
         code: err.code,
@@ -36,18 +36,63 @@ module.exports = {
     }
   },
 
-  fetchWallet: async (req, res) => {
+  fetchTransactions: async (req, res) => {
     try {
-      const fetchWallet = await services.wallet.fetchWallet(req.query.userId);
-
-      (fetchWallet.dataValues) ? delete fetchWallet.dataValues.lock_code : delete fetchWallet.lock_code;
+      let fetchTransactions;
+      if (req.query.type === 'realTime') fetchTransactions = await services.wallet.fetchRealTime(req.user, req.query);
+      else fetchTransactions = await services.wallet.fetchHistoricalTransactions(req.user, req.query);
 
       res.json({
         status: 'success',
-        data: fetchWallet,
+        data: fetchTransactions,
       });
     } catch (err) {
       console.log('Wallet fetch failed', err);
+      res.status(500).json({
+        status: 'error',
+        code: err.code,
+        message: err.msg,
+      });
+    }
+  },
+
+  fundPlan: async (req, res) => {
+    try {
+      const params = req.body;
+
+      res.mosh.emptyCheck((params.amount && params.amount > 0), 'A Valid Disburse Amount is required', null, false, 400, 'INVALID_AMOUNT');
+      res.mosh.emptyCheck(params.planName, '{planName} Plan Name is required.', null, false, 400, 'INVALID_PLAN_NAME');
+
+      const fund = await services.wallet.fundPlan(req.user, params);
+
+      res.json({
+        status: 'success',
+        data: fund,
+      });
+    } catch (err) {
+      console.log('Plan funding failed', err);
+      res.status(500).json({
+        status: 'error',
+        code: err.code,
+        message: err.msg,
+      });
+    }
+  },
+
+  reverseTransaction: async (req, res) => {
+    try {
+      const params = req.body;
+
+      res.mosh.emptyCheck(params.ref, '{ref} Transaction ref is required.', null, false, 400, 'INVALID_REFERENCE');
+
+      const fund = await services.wallet.reverseTransaction(req.user.id, params.ref, params);
+
+      res.json({
+        status: 'success',
+        data: fund,
+      });
+    } catch (err) {
+      console.log('Reversal failed', err);
       res.status(500).json({
         status: 'error',
         code: err.code,
@@ -79,8 +124,8 @@ module.exports = {
         res.mosh.emptyCheck(params.code, '{code} Sender bank code is required.', null, false, 400, 'INVALID_BANK_CODE');
       }
 
-      const allowedCrossCurrency = ['NGNNGN'];
-      res.mosh.emptyCheck(allowedCrossCurrency.includes(req.body.charge_currency + req.body.disburse_currency), `${req.body.charge_currency} - ${req.body.disburse_currency} Cross Currency Transactions are not allowed`, null, false, 400, 'INVALID_TOKEN');
+      const allowedCurrency = ['NGN', 'USD'];
+      res.mosh.emptyCheck(allowedCurrency.includes(req.body.charge_currency), `${req.body.charge_currency} Currency Transactions are not allowed`, null, false, 400, 'INVALID_TOKEN');
 
       const body = {
         email: req.body.email.toLowerCase(),
@@ -89,7 +134,7 @@ module.exports = {
         lastname: req.body.lastname,
         phonenumber: req.body.phonenumber,
         charge_currency: req.body.charge_currency,
-        disburse_currency: req.body.disburse_currency,
+        disburse_currency: req.body.charge_currency,
         fee: 40,
         narration: req.body.narration,
         amount: req.body.amount,
@@ -186,7 +231,56 @@ module.exports = {
       res.mosh.emptyCheck((params.amount && params.amount > 0), 'A Valid Disburse Amount is required', null, false, 400, 'INVALID_AMOUNT');
       res.mosh.emptyCheck(params.lock, '{lock} Lock is required', null, false, 400, 'INVALID_LOCK');
       res.mosh.emptyCheck(params.currency, '{currency} Currency is required', null, false, 400, 'INVALID_CURRENCY');
-      res.mosh.emptyCheck(params.medium, '{medium} Medium is required', null, false, 400, 'INVALID_MEDIUM');
+      res.mosh.emptyCheck(params.bankcode, '{bankcode} Bank Code is required.', null, false, 400, 'INVALID_BANK_CODE');
+      res.mosh.emptyCheck(params.accountNumber, '{accountNumber} Account Number is required.', null, false, 400, 'INVALID_ACCOUNT_NUMBER');
+      res.mosh.emptyCheck(params.accountName, '{accountName} Account Name is required.', null, false, 400, 'INVALID_ACCOUNT_NAME');
+
+      const disburse = await services.wallet.disburseFromWallet(req.user, params);
+
+      res.json({
+        status: 'success',
+        data: disburse,
+      });
+    } catch (err) {
+      console.log('Wallet Disburse failed', err);
+      res.status(500).json({
+        status: 'error',
+        code: err.code,
+        message: err.msg,
+      });
+    }
+  },
+
+  getROI: async (req, res) => {
+    try {
+      const params = req.qeury;
+
+      const getROI = await services.wallet.getROI(req.user, params);
+
+      res.json({
+        status: 'success',
+        data: getROI,
+      });
+    } catch (err) {
+      console.log('Get ROI failed', err);
+      res.status(500).json({
+        status: 'error',
+        code: err.code,
+        message: err.msg,
+      });
+    }
+  },
+
+  withdraw: async (req, res) => {
+    try {
+      const params = req.body;
+
+      res.mosh.emptyCheck((params.amount && params.amount > 0), 'A Valid Disburse Amount is required', null, false, 400, 'INVALID_AMOUNT');
+      res.mosh.emptyCheck(params.lock, '{lock} Lock is required', null, false, 400, 'INVALID_LOCK');
+      res.mosh.emptyCheck(params.currency, '{currency} Currency is required', null, false, 400, 'INVALID_CURRENCY');
+      res.mosh.emptyCheck(params.bankcode, '{bankcode} Bank Code is required.', null, false, 400, 'INVALID_BANK_CODE');
+      res.mosh.emptyCheck(params.accountNumber, '{accountNumber} Account Number is required.', null, false, 400, 'INVALID_ACCOUNT_NUMBER');
+      res.mosh.emptyCheck(params.accountName, '{accountName} Account Name is required.', null, false, 400, 'INVALID_ACCOUNT_NAME');
 
       const disburse = await services.wallet.disburseFromWallet(req.user, params);
 

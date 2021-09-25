@@ -16,7 +16,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     currency: {
       type: DataTypes.STRING,
-      defaultValue: 'NGN',
+      defaultValue: 'USD',
     },
     lock_code: {
       type: DataTypes.STRING,
