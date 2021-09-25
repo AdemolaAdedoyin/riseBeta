@@ -1,5 +1,5 @@
 # RISEBETA
-We want to build a source of truth for all transactions in our system. Design a transaction service that can handle the following requirements:
+We want to build a source of truth for all transactions in our system. A transaction service that can handle the following requirements:
 
 Funding with support for chargebacks and refunds
 Withdrawals
